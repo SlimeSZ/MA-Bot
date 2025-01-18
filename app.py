@@ -26,7 +26,10 @@ class ADScraper:
         self.swt_buy_amount = 0
         self.fresh_buy_amount = 0
         self.swt_wallet_types = []
-        self.fresh_wallet_type = None  # Added this as it was missing
+        self.fresh_wallet_type = None  
+
+        self.token_volume_data = {}
+        self.volume_tracking_tasks = {}
         
         self.individual_amounts = {
             'legend': 0,
@@ -49,15 +52,15 @@ class ADScraper:
 
         while True:
             try:
-                print(f"Checking for new messages...")  # Debug line
+                #print(f"Checking for new messages...")  # Debug line
                 async with session.get(url, headers=headers) as response:
                     if response.status == 200:
                         messages = await response.json()
                         if messages:
                             latest_message = messages[0]
                             message_id = latest_message['id']
-                            print(f"Latest message ID: {message_id}")  # Debug line
-                            print(f"Processed messages count: {len(self.processed_messages)}")  # Debug line
+                            #print(f"Latest message ID: {message_id}")  # Debug line
+                            #print(f"Processed messages count: {len(self.processed_messages)}")  # Debug line
                             
                             if message_id not in self.processed_messages:
                                 print(f"New message detected! Processing...")  # Debug line
@@ -152,7 +155,6 @@ class ADScraper:
             await self.dex.fetch_tokenomics(session, ca)
 
             if self.dex.token_on_dex:
-
                 alert_data = {
                     'token_name': token_name,
                     'ca': ca,
@@ -180,15 +182,22 @@ class ADScraper:
                     'price_change_24h': self.dex.token_24h_price_change,
                     'individual_amounts': self.individual_amounts
                 }
-
-
+                
+                # First index initial data
                 await self.index_ma_data_to_db(alert_data)
-            
+                
+                # Then start volume tracking (don't wait for it)
+                if ca not in self.volume_tracking_tasks:
+                    initial_volume = self.dex.token_5m_vol
+                    tracking_task = asyncio.create_task(
+                        self.track_volume_intervals(session, ca, initial_volume)
+                    )
+                    self.volume_tracking_tasks[ca] = tracking_task
+
             else:
                 print(f"Dex data not found, awaiting to index into db until data found")
         except Exception as e:
             print(str(e))
-
 
     async def index_ma_data_to_db(self, alert_data):
         conn = None
@@ -200,17 +209,27 @@ class ADScraper:
             conn.execute('BEGIN')
 
             main_query = '''
-            INSERT INTO multialerts (
+            INSERT OR REPLACE INTO multialerts (
             token_name, ca, alert_time, swt_sol_amount, fresh_sol_amount,
             swt_wallet_type, fresh_wallet_type,
             has_x, has_tg, liquidity, initial_marketcap,
             volume_5m, volume_1h, volume_6h, volume_24h,
             buys_5m, sells_5m, buys_1h, sells_1h,
             buys_24h, sells_24h, price_change_5m,
-            price_change_1h, price_change_24h
+            price_change_1h, price_change_24h,
+            legend_amount, kol_regular_amount, kol_alpha_amount,
+            smart_amount, whale_amount, challenge_amount,
+            high_freq_amount, insider_amount,
+            fresh_amount, fresh_1h_amount, fresh_5sol_1m_mc_amount,
+            volume_initial, volume_1min, volume_3min, volume_5min
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             '''
+
+            individual_amounts = alert_data['individual_amounts']
+            volume_data = self.token_volume_data.get(alert_data['ca'], {})
+            
             cursor.execute(main_query, (
                 alert_data['token_name'],
                 alert_data['ca'],
@@ -235,7 +254,22 @@ class ADScraper:
                 alert_data.get('sells_24h', 0),
                 alert_data.get('price_change_5m', 0),
                 alert_data.get('price_change_1h', 0),
-                alert_data.get('price_change_24h', 0)
+                alert_data.get('price_change_24h', 0),
+                individual_amounts.get('legend', 0),
+                individual_amounts.get('kol regular', 0),
+                individual_amounts.get('kol alpha', 0),
+                individual_amounts.get('smart', 0),
+                individual_amounts.get('whale', 0),
+                individual_amounts.get('challenge', 0),
+                individual_amounts.get('high freq', 0),
+                individual_amounts.get('insider', 0),
+                individual_amounts.get('fresh', 0),
+                individual_amounts.get('fresh 1h', 0),
+                individual_amounts.get('fresh 5sol 1m mc', 0),
+                volume_data.get('initial', 0),
+                volume_data.get('1min', 0),
+                volume_data.get('3min', 0),
+                volume_data.get('5min', 0)
             ))
             alert_id = cursor.lastrowid
 
@@ -268,6 +302,101 @@ class ADScraper:
                 except Exception as e:
                     print(f"Error closing connection: {e}")
 
+
+    async def update_volume_interval(self, ca, interval_name, volume):
+        """Update specific volume interval for a CA"""
+        conn = None
+        try:
+            conn = sqlite3.connect('mcdb.db')
+            cursor = conn.cursor()
+
+            # Map interval name to column name
+            column_map = {
+                'initial': 'volume_initial',
+                '1min': 'volume_1min',
+                '3min': 'volume_3min',
+                '5min': 'volume_5min'
+            }
+
+            column_name = column_map[interval_name]
+            update_query = f'''
+            UPDATE multialerts 
+            SET {column_name} = ? 
+            WHERE ca = ?
+            '''
+            
+            cursor.execute(update_query, (volume, ca))
+            conn.commit()
+            print(f"Successfully updated {interval_name} volume for {ca}")
+
+        except Exception as e:
+            print(f"Error updating {interval_name} volume: {e}")
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                conn.close()
+
+    async def track_volume_intervals(self, session, ca, initial_volume):
+        try:
+            print(f"Initial volume: ${initial_volume:,.2f} \nfor: {ca}" if initial_volume else "Initial volume: Unknown")
+
+            # First update initial volume
+            await self.update_volume_interval(ca, 'initial', initial_volume)
+
+            intervals = {
+                '1min': 60,
+                '3min': 180,
+                '5min': 300
+            }
+
+            volumes = {
+                'initial': initial_volume,
+                '1min': None,
+                '3min': None,
+                '5min': None
+            }
+
+            start_time = time.time()
+
+            for interval_name, target_delay in sorted(intervals.items(), key=lambda x: x[1]):
+                try:
+                    elapsed = time.time() - start_time
+                    wait_time = target_delay - elapsed
+                    
+                    if wait_time > 0:
+                        print(f"\nWaiting {wait_time:.1f} seconds for {interval_name} volume check...")
+                        await asyncio.sleep(wait_time)
+                    
+                    print(f"Fetching {interval_name} volume for {ca}...")
+                    await self.dex.fetch_tokenomics(session, ca)
+                    current_volume = self.dex.token_5m_vol
+                    volumes[interval_name] = current_volume
+                    
+                    # Update this interval's volume in database
+                    await self.update_volume_interval(ca, interval_name, current_volume)
+                    
+                    print(f"Volume after {interval_name}: ${current_volume:,.2f}" if current_volume else f"Volume after {interval_name}: Unknown")
+                    
+                except Exception as e:
+                    print(f"Error fetching {interval_name} volume for {ca}: {e}")
+                    volumes[interval_name] = 0
+
+            self.token_volume_data[ca] = volumes
+            
+            # Print final summary after all intervals are complete
+            print(f"\n{'='*20} Final Volume Summary for {ca} {'='*20}")
+            print(f"Initial: ${volumes['initial']:,.2f}" if volumes['initial'] else "Initial: Unknown")
+            print(f"1 minute: ${volumes['1min']:,.2f}" if volumes['1min'] else "1 minute: Unknown")
+            print(f"3 minutes: ${volumes['3min']:,.2f}" if volumes['3min'] else "3 minutes: Unknown")
+            print(f"5 minutes: ${volumes['5min']:,.2f}" if volumes['5min'] else "5 minutes: Unknown")
+            print("="*70)
+
+        except Exception as e:
+            print(f"Error in volume tracking for {ca}: {e}")
+        finally:
+            if ca in self.volume_tracking_tasks:
+                del self.volume_tracking_tasks[ca]
 
 class Dex:
     def __init__(self):
@@ -313,7 +442,7 @@ class Dex:
                         return
                     
                     json_data = await response.json()
-                    print(f"Raw API response: {json_data}")  # Debug print
+                    #print(f"Raw API response: {json_data}")  # Debug print
                     
                     if not json_data:
                         print("json_data is empty")
@@ -327,7 +456,7 @@ class Dex:
                         print("json_data['pairs'] is empty")
                         continue
 
-                    print(f"Found {len(json_data['pairs'])} pairs")
+                    #print(f"Found {len(json_data['pairs'])} pairs")
                     self.token_on_dex = True
 
                     for pair in json_data['pairs']:

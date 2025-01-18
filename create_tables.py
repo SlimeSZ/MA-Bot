@@ -32,7 +32,22 @@ def create_tables():
         sells_24h INTEGER,
         price_change_5m REAL,
         price_change_1h REAL,
-        price_change_24h REAL
+        price_change_24h REAL,
+        legend_amount REAL DEFAULT 0,
+        kol_regular_amount REAL DEFAULT 0,
+        kol_alpha_amount REAL DEFAULT 0,
+        smart_amount REAL DEFAULT 0,
+        whale_amount REAL DEFAULT 0,
+        challenge_amount REAL DEFAULT 0,
+        high_freq_amount REAL DEFAULT 0,
+        insider_amount REAL DEFAULT 0,
+        fresh_amount REAL DEFAULT 0,
+        fresh_1h_amount REAL DEFAULT 0,
+        fresh_5sol_1m_mc_amount REAL DEFAULT 0,
+        volume_initial REAL DEFAULT 0,
+        volume_1min REAL DEFAULT 0,
+        volume_3min REAL DEFAULT 0,
+        volume_5min REAL DEFAULT 0
     )
     ''')
 
