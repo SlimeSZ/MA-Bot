@@ -7,6 +7,8 @@ from datetime import datetime
 #from token_revival import TokenRevivalMonitor
 from env import TOKEN, MULTI_ALERT_WEBHOOK, TWOX_WEBHOOK
 
+from flaggedtoken import tracker
+
 
 class DexScreenerAPI:
     def __init__(self):
@@ -46,21 +48,22 @@ class DexScreenerAPI:
         self.token_on_pump = False
         
         self.token_dex_url = None
+
         
     async def fetch_token_data_from_dex(self, session, ca):
         self.reset_data()
-        print(f"\n=== Fetching DexScreener Data for {ca[:8]}... ===")
+        #print(f"\n=== Fetching DexScreener Data for {ca[:8]}... ===")
 
         url = f"https://api.dexscreener.com/latest/dex/search?q={ca}"
         try:
             async with session.get(url) as response:
                 if response.status != 200:
-                    print(f"[ERROR] Dex Screener API Returned Status: {response.status}")
+                    #print(f"[ERROR] Dex Screener API Returned Status: {response.status}")
                     return
                 
                 json_data = await response.json()
                 if not json_data or 'pairs' not in json_data or not json_data['pairs']:
-                    print(f"[INFO] No pairs found for {ca[:8]}... - Token might be on Pump")
+                    #print(f"[INFO] No pairs found for {ca[:8]}... - Token might be on Pump")
                     self.token_on_pump = True
                     return
                 
@@ -69,10 +72,10 @@ class DexScreenerAPI:
                 found_pair = False
                 for pair in json_data['pairs']:
                     found_pair = True
-                    print("\nToken Metrics:")
+                    #print("\nToken Metrics:")
                     #get mc
                     self.token_mc = float(pair.get('fdv', 0))
-                    print(f"- Market Cap: ${self.token_mc:,.2f}")
+                    #print(f"- Market Cap: ${self.token_mc:,.2f}")
                     #self.token_name = pair.get('baseToken', {}).get('name', '')
                     #print(f"- Token Name: {self.token_name}")
 
@@ -82,7 +85,7 @@ class DexScreenerAPI:
                     self.token_1h_vol = float(volume_data.get('h1', 0))
                     self.token_6h_vol = float(volume_data.get('h6', 0))
                     self.token_24h_vol = float(volume_data.get('h24', 0))
-                    print(f"- 1h Volume: ${self.token_1h_vol:,.2f}")
+                    #print(f"- 1h Volume: ${self.token_1h_vol:,.2f}")
 
                     #get buys & sells
                     txns_data = pair.get('txns', {})
@@ -105,7 +108,7 @@ class DexScreenerAPI:
                     #get liquidity
                     liquidity_data = pair.get('liquidity', {})
                     self.token_liquidity = float(liquidity_data.get('usd', 0))
-                    print(f"- Liquidity: ${self.token_liquidity:,.2f}")
+                    #print(f"- Liquidity: ${self.token_liquidity:,.2f}")
                     
                     #x, tg, and dex url
                     info = pair.get('info', {})
@@ -119,10 +122,10 @@ class DexScreenerAPI:
                             self.x_link = social.get('url', 'No Twitter Link')
                     self.token_dex_url = pair.get('url', '')
                     
-                    print("\nSocial Links:")
-                    print(f"- Telegram: {'Yes' if self.has_tg else 'No'}")
-                    print(f"- Twitter: {'Yes' if self.has_x else 'No'}")
-                    print(f"- DEX URL: {self.token_dex_url}")
+                    #print("\nSocial Links:")
+                    #print(f"- Telegram: {'Yes' if self.has_tg else 'No'}")
+                    #print(f"- Twitter: {'Yes' if self.has_x else 'No'}")
+                    #print(f"- DEX URL: {self.token_dex_url}")
                     break
                     
         except Exception as e:
@@ -161,6 +164,19 @@ class AlefDaoScraper:
         self.multi_alert_webhook = MULTI_ALERT_WEBHOOK
         self.twox_webhook = TWOX_WEBHOOK
 
+    async def flag_token_for_tracking(self, ca: str, token_name: str):
+        tracker.initialize_token(ca, token_name)
+        #print(f"Flagged token: {token_name} ({ca})")
+
+    async def stop_tracking_token(self, ca: str):
+        tracker.stop_tracking(ca)
+
+    async def list_tracked_tokens(self):
+        #print("\nCurrently Tracked Tokens:")
+        for ca, data in tracker.tracked_tokens.items():
+            print(f"- {data['name']} ({ca[:8]}...)")
+
+
     
     async def swt_fetch_messages(self, session, channel_id, ca_set, channel_name):
         headers = {'authorization': TOKEN}
@@ -178,7 +194,7 @@ class AlefDaoScraper:
                             message_id = latest_message['id']
                             if message_id not in processed_messages:
                                 processed_messages.add(message_id)
-                                print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] New message in {channel_name}")
+                                #print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] New message in {channel_name}")
                                 await self.swt_process_messages(session, latest_message, ca_set, channel_name)
                     else:
                         print(f"[ERROR] Failed to fetch messages from {channel_name}: Status {response.status}")
@@ -206,7 +222,7 @@ class AlefDaoScraper:
             # Quick check - if the message ends with "sol" (after trading platform name), it's a sell
             main_tx = description_lower.split(" on ")[0].strip()
             if main_tx.endswith("sol"):
-                #print(f"[{channel_name}] Skipping SELL transaction (SOL is output): {tx_description}")
+                print(f"[{channel_name}] Skipping SELL transaction (SOL is output): {tx_description}")
                 return
             
             # Check if this is a swap transaction
@@ -215,7 +231,7 @@ class AlefDaoScraper:
 
             # If transaction contains " for x sol " pattern, it's a sell
             if re.search(r'\sfor\s+[\d,.]+\s+sol\s', description_lower):
-                #print(f"[{channel_name}] Skipping SELL transaction (token→SOL swap): {tx_description}")
+                print(f"[{channel_name}] Skipping SELL transaction (token→SOL swap): {tx_description}")
                 return
 
             #print(f"\n=== Processing Message from {channel_name} ===")
@@ -227,6 +243,8 @@ class AlefDaoScraper:
                 if token_name not in {'sol', 'useful links', 'buy with bonkbot', 'token address'}:
                     ca = field.get('value', '')
                     if ca and ca not in {'So11111111111111111111111111111111111111112', '[Wallet]', '[Neo]'}:
+                        if ca in tracker.tracked_tokens:
+                            await tracker.process_transaction(ca, tx_description, channel_name)
                         sol_amount = self.extract_sol_buy_amount(tx_description)
                         if sol_amount > 0:
                             wallet_type = 'fresh' if 'fresh' in channel_name.lower() else 'swt'
@@ -304,6 +322,8 @@ class AlefDaoScraper:
                 if token_name not in {'sol', 'useful links', 'buy with bonkbot', 'token address'}:
                     ca = field.get('value', '')
                     if ca and ca not in {'So11111111111111111111111111111111111111112', '[Wallet]', '[Neo]'}:
+                        if ca in tracker.tracked_tokens:
+                            await tracker.process_transaction(ca, tx_description, channel_name)
                         ca_set.add(ca)
                         """
                         if ca not in self.ca_to_tx_descriptions:
@@ -400,6 +420,8 @@ class AlefDaoScraper:
                     if field_name == "token address:":
                         ca = field.get('value', '').strip()
                         if ca and ca not in {'So11111111111111111111111111111111111111112', '[Wallet]', '[Neo]'}:
+                            if ca in tracker.tracked_tokens:
+                                await tracker.process_transaction(ca, tx_description, channel_name)
                             sol_amount = self.extract_sol_buy_amount(tx_description)
                             if sol_amount > 0:
                                 wallet_type = 'fresh' if 'fresh' in channel_name.lower() else 'swt'
@@ -456,7 +478,7 @@ class AlefDaoScraper:
                 if current_mc is None or current_mc == 0:
                     retries += 1
                     if retries >= max_retries:
-                        print(f"Stopping monitoring for {ca} - No valid market cap data")
+                        #print(f"Stopping monitoring for {ca} - No valid market cap data")
                         return
                     await asyncio.sleep(5)
                     continue
@@ -518,7 +540,7 @@ class AlefDaoScraper:
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.twox_webhook, json=data) as response:
                     if response.status == 204:
-                        print(f"2x alert sent successfully for {token_name}!")
+                        print(f"")
                     else:
                         print(f"Failed to send 2x alert webhook: {response.status}")
 
@@ -643,19 +665,22 @@ class AlefDaoScraper:
                 combined_description = "\n".join([desc for desc, _ in self.ca_to_tx_descriptions.get(ca, [])])
                 sol_buys = self.aggregate_sol_buys(self.ca_to_tx_descriptions.get(ca, []))
 
-                print("\nMASOL Buy Amounts:")
+                #print("\nMASOL Buy Amounts:")
                 for wallet_type, amount in sol_buys.items():
                     if amount > 0:
-                        print(f"{wallet_type}: {amount:.2f} SOL")
+                        print("")
+                        #print(f"{wallet_type}: {amount:.2f} SOL")
                 print("\nChannel Names and Transactions:")
                 for desc, channel in self.ca_to_tx_descriptions.get(ca, []):
-                    print(f"{channel}: {desc}")
+                    #print(f"{channel}: {desc}")
+                    print("")
 
                 sol_wallets_str = ', '.join(sol_wallet_names)
                 
                 market_cap_display = "${:,.2f}".format(self.dex.token_mc) if self.dex.token_mc else "Unknown"
                 volume_display = "${:,.2f}".format(self.dex.token_5m_vol) if self.dex.token_5m_vol else "Unknown"
                 
+                """
                 print(
                     f"{"-" * 15}\n"
                     f"\n=== Multi-Alert Found at {alert_time} ===\n"
@@ -675,6 +700,7 @@ class AlefDaoScraper:
                     f"DEX: {self.dex.token_dex_url or 'No DEX URL'}\n"
                     f"{"-" * 15}\n"
                 )
+                """
 
                 await self.send_webhook_message(
                     ca=ca,
@@ -771,7 +797,8 @@ class AlefDaoScraper:
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.multi_alert_webhook, json=data) as response:
                     if response.status == 204:
-                        print("Multi-alert webhook sent successfully!")
+                        print("")
+                        #print("Multi-alert webhook sent successfully!")
                     else:
                         print(f"Failed to send multi-alert webhook: {response.status}")
 
@@ -797,7 +824,7 @@ class SolAmountTracker:
             
     async def add_transaction(self, ca, sol_amount, tx_description, channel_name, wallet_type, token_name=None):
         """Add a new transaction and update cumulative amounts"""
-        print(f"Processing transaction: {sol_amount} SOL from {channel_name} for {ca}")
+        #print(f"Processing transaction: {sol_amount} SOL from {channel_name} for {ca}")
         try:
             # First initialize tracking for this CA
             await self.initialize_ca_tracking(ca, token_name)
@@ -845,7 +872,7 @@ class SolAmountTracker:
             large_single_buys = [tx for tx in transactions if tx['amount'] >= 10.0]
             if large_single_buys:
                 largest_buy = max(large_single_buys, key=lambda x: x['amount'])
-                print(f"Found 10+ SOL buy: {largest_buy['amount']} from {largest_buy['channel']}")
+                #print(f"Found 10+ SOL buy: {largest_buy['amount']} from {largest_buy['channel']}")
                 alerts_to_send.append(('One 10+ sol buy', [largest_buy]))
             
             # Check for 5+ SOL buys from different channels
@@ -862,12 +889,12 @@ class SolAmountTracker:
                 different_channel_buys = sorted(channels_with_large_buys.values(), 
                                             key=lambda x: x['amount'], 
                                             reverse=True)[:2]
-                print(f"Found 5+ SOL buys from different channels: {[tx['channel'] for tx in different_channel_buys]}")
+                #print(f"Found 5+ SOL buys from different channels: {[tx['channel'] for tx in different_channel_buys]}")
                 alerts_to_send.append(('Two 5+ sol buys', different_channel_buys))
 
             if alerts_to_send:
                 self.sol_alerted_cas.add(ca)
-                print(f"Sending alerts for {ca}: {[alert[0] for alert in alerts_to_send]}")
+                #print(f"Sending alerts for {ca}: {[alert[0] for alert in alerts_to_send]}")
                 for alert_type, txs in alerts_to_send:
                     await self.send_alert(ca, alert_type, txs)
 
