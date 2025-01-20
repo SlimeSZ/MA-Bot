@@ -164,8 +164,8 @@ class AlefDaoScraper:
         self.multi_alert_webhook = MULTI_ALERT_WEBHOOK
         self.twox_webhook = TWOX_WEBHOOK
 
-    async def flag_token_for_tracking(self, ca: str, token_name: str):
-        tracker.initialize_token(ca, token_name)
+    async def flag_token_for_tracking(self, ca: str):
+        tracker.initialize_token(ca)
         #print(f"Flagged token: {token_name} ({ca})")
 
     async def stop_tracking_token(self, ca: str):

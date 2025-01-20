@@ -1,4 +1,4 @@
-# flaggedtoken.py
+
 
 
 from datetime import datetime
@@ -10,17 +10,17 @@ class TokenTransactionTracker:
     def __init__(self):
         self.tracked_tokens: Dict[str, Dict] = {}
     
-    def initialize_token(self, ca: str, token_name: str = "Unknown"):
+    def initialize_token(self, ca: str):
         if ca not in self.tracked_tokens:
             self.tracked_tokens[ca] = {
-                'name': token_name,
+                'ca': ca,
                 'buys': [],
                 'sells': [],
                 'buy_count': 0,
                 'sell_count': 0,
                 'first_seen': datetime.now()
             }
-            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Flagged: {token_name} ({ca[:8]}...)")
+            print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Flagged: ({ca[:8]}...)")
     
     def extract_sol_amount(self, tx_description: str) -> Tuple[float, bool]:
         description = tx_description.lower()

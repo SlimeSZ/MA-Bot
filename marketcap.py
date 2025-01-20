@@ -84,7 +84,7 @@ if __name__ == "__main__":
     analyzer = SolanaTokenAnalyzer()
     
     # Token address to analyze
-    token_address = "TOKEN_ADDRESS"
+    token_address = "ED5nyyWEzpPPiWimP8vYm7sD7TD3LAt3Q3gRTWHzPJBY"
     
     try:
         # Calculate market cap
