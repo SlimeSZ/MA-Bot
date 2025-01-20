@@ -1,8 +1,9 @@
 import sqlite3
 from datetime import datetime
+import os
 
 def create_tables():
-    conn = sqlite3.connect('MCDB.db')
+    conn = sqlite3.connect('mcdb.db')
     cursor = conn.cursor()
 
     # Main multialerts table
@@ -47,7 +48,18 @@ def create_tables():
         volume_initial REAL DEFAULT 0,
         volume_1min REAL DEFAULT 0,
         volume_3min REAL DEFAULT 0,
-        volume_5min REAL DEFAULT 0
+        volume_5min REAL DEFAULT 0,
+        volume_10min REAL DEFAULT 0,
+        volume_20min REAL DEFAULT 0,
+        volume_40min REAL DEFAULT 0,
+        volume_60min REAL DEFAULT 0,
+        marketcap_10min REAL DEFAULT 0,
+        marketcap_30min REAL DEFAULT 0,
+        marketcap_1hr REAL DEFAULT 0,
+        marketcap_3hrs REAL DEFAULT 0,
+        marketcap_5hrs REAL DEFAULT 0,
+        marketcap_10hrs REAL DEFAULT 0,
+        two_x BOOLEAN DEFAULT 0
     )
     ''')
 

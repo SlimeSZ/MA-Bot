@@ -4,8 +4,14 @@ import aiohttp
 import re
 import time
 from datetime import datetime
-from env import TOKEN, MA_CHANNEL_ID
+from env import TOKEN, MA_CHANNEL_ID, TWOX_CHANNEL_ID
+import os
 import sqlite3
+import create_tables
+
+create_tables.create_tables()
+
+
 
 class ADScraper:
     def __init__(self):
@@ -20,6 +26,7 @@ class ADScraper:
     def reset_values(self):
         """Reset all instance variables for new message processing"""
         self.ca = None
+        self.twoxca = None
         self.token_name = None
         self.has_tg = False
         self.has_x = False
@@ -30,6 +37,7 @@ class ADScraper:
 
         self.token_volume_data = {}
         self.volume_tracking_tasks = {}
+        self.marketcap_tracking_tasks = {}
         
         self.individual_amounts = {
             'legend': 0,
@@ -44,6 +52,84 @@ class ADScraper:
             'fresh 1h': 0,
             'fresh 5sol 1m mc': 0 
         }
+
+    async def fetch_2x_channel(self, session, channel_id, channel_name):
+        headers = {'authorization': TOKEN}
+        url = self.url.format(channel_id)
+
+        while True:
+            try:
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        messages = await response.json()
+                        if messages:
+                            latest_message = messages[0]
+                            message_id = latest_message['id']
+                            if message_id not in self.processed_messages:
+                                print(f"Found new message in {channel_name}")
+                                self.processed_messages.add(message_id)
+                                await self.process_2x_channel(session, latest_message, channel_name)
+                            else:
+                                print(f"")
+                        else:
+                            print(f"No messages returned from api")
+                    else:
+                        print(f"Error failed to fetch messages from {channel_name}")
+                await asyncio.sleep(15)
+            except Exception as e:
+                print(f"Error in fetching 2x messages: {str(e)}")
+                await asyncio.sleep(5)
+
+    async def process_2x_channel(self, session, message, channel_name):
+        try:
+            embeds = message.get('embeds', [])
+            if not embeds:
+                print(f"No embeds found!")
+                return
+            
+            embed = embeds[0]
+
+            description = embed.get('description', '').lower()
+            
+            ca_match = re.search(r'ca:\s*`([^`]+)`', description, re.IGNORECASE)
+            if not ca_match:
+                print("No CA found in description")
+                return
+            ca = ca_match.group(1)
+            print(f"Found CA: {ca}")
+
+            conn = None
+            try:
+                conn = sqlite3.connect('mcdb.db')
+                cursor = conn.cursor()
+
+                cursor.execute('SELECT id FROM multialerts WHERE ca = ?', (ca, ))
+                result = cursor.fetchone()
+
+                if result:
+                    cursor.execute('SELECT id FROM multialerts WHERE ca = ?', (ca, ))
+                    result = cursor.fetchone()
+
+                    if result:
+                        cursor.execute('UPDATE multialerts SET two_x = ? WHERE ca = ?', (True, ca))
+                        conn.commit()
+                        print(f"Updated token {ca} as having hit 2x! ")
+                    else:
+                        print(f"CA {ca} from 2x alert not found in db")
+            except Exception as e:
+                print(f"Error updating 2x status: {e}")
+                if conn:
+                    conn.rollback()
+            finally:
+                if conn:
+                    conn.close()
+
+            
+        except Exception as e:
+            print(str(e))
+        
+            
+
 
     async def fetch_ma_messages(self, session, channel_id, channel_name):
         headers = {'authorization': TOKEN}
@@ -180,7 +266,8 @@ class ADScraper:
                     'price_change_5m': self.dex.token_5m_price_change,
                     'price_change_1h': self.dex.token_1h_price_change,
                     'price_change_24h': self.dex.token_24h_price_change,
-                    'individual_amounts': self.individual_amounts
+                    'individual_amounts': self.individual_amounts,
+                    'two_x': False
                 }
                 
                 # First index initial data
@@ -193,6 +280,13 @@ class ADScraper:
                         self.track_volume_intervals(session, ca, initial_volume)
                     )
                     self.volume_tracking_tasks[ca] = tracking_task
+
+                if ca not in self.marketcap_tracking_tasks:
+                    initial_marketcap = self.dex.token_fdv
+                    tracking_task = asyncio.create_task(
+                        self.track_marketcap_intervals(session, ca, initial_marketcap)
+                    )
+                    self.marketcap_tracking_tasks[ca] = tracking_task
 
             else:
                 print(f"Dex data not found, awaiting to index into db until data found")
@@ -221,10 +315,11 @@ class ADScraper:
             smart_amount, whale_amount, challenge_amount,
             high_freq_amount, insider_amount,
             fresh_amount, fresh_1h_amount, fresh_5sol_1m_mc_amount,
-            volume_initial, volume_1min, volume_3min, volume_5min
+            volume_initial, volume_1min, volume_3min, volume_5min, volume_10min, volume_20min, volume_40min, volume_60min,
+            two_x
             )
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             '''
 
             individual_amounts = alert_data['individual_amounts']
@@ -269,7 +364,12 @@ class ADScraper:
                 volume_data.get('initial', 0),
                 volume_data.get('1min', 0),
                 volume_data.get('3min', 0),
-                volume_data.get('5min', 0)
+                volume_data.get('5min', 0),
+                volume_data.get('10min', 0),
+                volume_data.get('20min', 0),
+                volume_data.get('40min', 0),
+                volume_data.get('60min', 0),
+                False
             ))
             alert_id = cursor.lastrowid
 
@@ -302,7 +402,86 @@ class ADScraper:
                 except Exception as e:
                     print(f"Error closing connection: {e}")
 
+    async def update_marketcap_interval(self, ca, interval_name, marketcap):
+        conn = None
+        try:
+            conn = sqlite3.connect('mcdb.db')
+            cursor = conn.cursor()
 
+            column_map = {
+                '10min': 'marketcap_10min',
+                '30min': 'marketcap_30min',
+                '1hr': 'marketcap_1hr',
+                '3hrs': 'marketcap_3hrs',
+                '5hrs': 'marketcap_5hrs',
+                '10hrs': 'marketcap_10hrs'
+            }
+
+            column_name = column_map[interval_name]
+            update_query = f'''
+            UPDATE multialerts 
+            SET {column_name} = ? 
+            WHERE ca = ?
+            '''
+
+            cursor.execute(update_query, (marketcap, ca))
+            conn.commit()
+            print(f"Successfully updated {interval_name} marketcap for {ca}")
+
+        except Exception as e:
+            print(f"Error updating {interval_name} marketcap: {e}")
+            if conn:
+                conn.rollback()
+        finally:
+            if conn:
+                conn.close()
+
+    async def track_marketcap_intervals(self, session, ca, initial_marketcap):
+        try:
+            print(f"Starting marketcap tracking for {ca}")
+            print(f"Initial marketcap: ${initial_marketcap:,.2f}" if initial_marketcap else "Initial marketcap: Unknown")
+
+            intervals = {
+                '10min': 600,    # 10 minutes
+                '30min': 1800,   # 30 minutes
+                '1hr': 3600,     # 1 hour
+                '3hrs': 10800,   # 3 hours
+                '5hrs': 18000,   # 5 hours
+                '10hrs': 36000   # 10 hours
+            }
+
+            start_time = time.time()
+
+            for interval_name, target_delay in sorted(intervals.items(), key=lambda x: x[1]):
+                try:
+                    elapsed = time.time() - start_time
+                    wait_time = target_delay - elapsed
+                    
+                    if wait_time > 0:
+                        print(f"\nWaiting {wait_time:.1f} seconds for {interval_name} marketcap check...")
+                        await asyncio.sleep(wait_time)
+                    
+                    print(f"Fetching {interval_name} marketcap for {ca}...")
+                    await self.dex.fetch_tokenomics(session, ca)
+                    current_marketcap = self.dex.token_fdv
+                    
+                    # Update this interval's marketcap in database
+                    await self.update_marketcap_interval(ca, interval_name, current_marketcap)
+                    
+                    print(f"Marketcap after {interval_name}: ${current_marketcap:,.2f}" if current_marketcap else f"Marketcap after {interval_name}: Unknown")
+                    
+                except Exception as e:
+                    print(f"Error fetching {interval_name} marketcap for {ca}: {e}")
+                    await self.update_marketcap_interval(ca, interval_name, 0)
+
+        except Exception as e:
+            print(f"Error in marketcap tracking for {ca}: {e}")
+        finally:
+            if ca in self.marketcap_tracking_tasks:
+                del self.marketcap_tracking_tasks[ca]
+
+
+    
     async def update_volume_interval(self, ca, interval_name, volume):
         """Update specific volume interval for a CA"""
         conn = None
@@ -315,7 +494,11 @@ class ADScraper:
                 'initial': 'volume_initial',
                 '1min': 'volume_1min',
                 '3min': 'volume_3min',
-                '5min': 'volume_5min'
+                '5min': 'volume_5min',
+                '10min': 'volume_10min',
+                '20min': 'volume_20min',
+                '40min': 'volume_40min',
+                '60min': 'volume_60min'
             }
 
             column_name = column_map[interval_name]
@@ -347,14 +530,22 @@ class ADScraper:
             intervals = {
                 '1min': 60,
                 '3min': 180,
-                '5min': 300
+                '5min': 300,
+                '10min': 600,
+                '20min': 1200,
+                '40min': 2400,
+                '60min': 3600
             }
 
             volumes = {
                 'initial': initial_volume,
                 '1min': None,
                 '3min': None,
-                '5min': None
+                '5min': None,
+                '10min': None,
+                '20min': None,
+                '40min': None,
+                '60min': None
             }
 
             start_time = time.time()
@@ -385,12 +576,12 @@ class ADScraper:
             self.token_volume_data[ca] = volumes
             
             # Print final summary after all intervals are complete
-            print(f"\n{'='*20} Final Volume Summary for {ca} {'='*20}")
-            print(f"Initial: ${volumes['initial']:,.2f}" if volumes['initial'] else "Initial: Unknown")
-            print(f"1 minute: ${volumes['1min']:,.2f}" if volumes['1min'] else "1 minute: Unknown")
-            print(f"3 minutes: ${volumes['3min']:,.2f}" if volumes['3min'] else "3 minutes: Unknown")
-            print(f"5 minutes: ${volumes['5min']:,.2f}" if volumes['5min'] else "5 minutes: Unknown")
-            print("="*70)
+            #print(f"\n{'='*20} Final Volume Summary for {ca} {'='*20}")
+            #print(f"Initial: ${volumes['initial']:,.2f}" if volumes['initial'] else "Initial: Unknown")
+            #print(f"1 minute: ${volumes['1min']:,.2f}" if volumes['1min'] else "1 minute: Unknown")
+            #print(f"3 minutes: ${volumes['3min']:,.2f}" if volumes['3min'] else "3 minutes: Unknown")
+            #print(f"5 minutes: ${volumes['5min']:,.2f}" if volumes['5min'] else "5 minutes: Unknown")
+            #print("="*70)
 
         except Exception as e:
             print(f"Error in volume tracking for {ca}: {e}")
@@ -535,8 +726,16 @@ class Dex:
                     continue
 
 async def main():
-        scraper = ADScraper()
-        async with aiohttp.ClientSession() as session:
-            await scraper.fetch_ma_messages(session, MA_CHANNEL_ID, 'Multi-Alert Channel')
+    scraper = ADScraper()
+    async with aiohttp.ClientSession() as session:
+        tasks = [
+            scraper.fetch_ma_messages(session, MA_CHANNEL_ID, 'Multi-Alert Channel'),
+            scraper.fetch_2x_channel(session, TWOX_CHANNEL_ID, 'Two-x Channel')
+        ]
+        try:
+            await asyncio.gather(*tasks)  # Remove await from inside the list
+        except Exception as e:
+            print(f"Error: {str(e)}")
+            await asyncio.sleep(5)
 if __name__ == "__main__":
     asyncio.run(main())
