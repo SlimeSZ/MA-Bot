@@ -80,6 +80,9 @@ class ADScraper:
                 print(f"Error in fetching 2x messages: {str(e)}")
                 await asyncio.sleep(5)
 
+    def normalize(self, ca: str) -> str:
+        return ca.strip().lower().replace('`', '')
+
     async def process_2x_channel(self, session, message, channel_name):
         try:
             embeds = message.get('embeds', [])
@@ -95,7 +98,8 @@ class ADScraper:
             if not ca_match:
                 print("No CA found in description")
                 return
-            ca = ca_match.group(1)
+            
+            ca = self.normalize(ca_match.group(1))
             print(f"Found CA: {ca}")
 
             conn = None
@@ -103,19 +107,22 @@ class ADScraper:
                 conn = sqlite3.connect('mcdb.db')
                 cursor = conn.cursor()
 
-                cursor.execute('SELECT id FROM multialerts WHERE ca = ?', (ca, ))
+                cursor.execute('''
+                SELECT id
+                FROM multialerts
+                WHERE LOWER(TRIM(REPLACE(ca, "`", ""))) = LOWER(TRIM(?))
+                COLLATE NOCASE
+                ''', (ca, ))
+
                 result = cursor.fetchone()
 
                 if result:
-                    cursor.execute('SELECT id FROM multialerts WHERE ca = ?', (ca, ))
-                    result = cursor.fetchone()
-
-                    if result:
-                        cursor.execute('UPDATE multialerts SET two_x = ? WHERE ca = ?', (True, ca))
-                        conn.commit()
-                        print(f"Updated token {ca} as having hit 2x! ")
-                    else:
-                        print(f"CA {ca} from 2x alert not found in db")
+                    cursor.execute('UPDATE multialerts SET two_x = ? WHERE id = ?', (True, result[0]))
+                    conn.commit()
+                    print(f"Updated token {ca} as having a 2x! ")
+                else:
+                    print(f"CA {ca} from 2x alert not found in database")
+                    
             except Exception as e:
                 print(f"Error updating 2x status: {e}")
                 if conn:
@@ -184,7 +191,7 @@ class ADScraper:
                 token_fields = field.get('name', '').strip().lower()
                 #ca
                 if token_fields == "ca":
-                    ca = field.get('value', '')
+                    ca = self.normalize(field.get('value', ''))
                     print(ca)
                     if not ca:
                         print(f"Unable to fetch ca")
@@ -292,6 +299,7 @@ class ADScraper:
                 print(f"Dex data not found, awaiting to index into db until data found")
         except Exception as e:
             print(str(e))
+
 
     async def index_ma_data_to_db(self, alert_data):
         conn = None
