@@ -6,17 +6,12 @@ import time
 from datetime import datetime
 #from token_revival import TokenRevivalMonitor
 from env import TOKEN, MULTI_ALERT_WEBHOOK, TWOX_WEBHOOK
-from typing import Dict, Tuple
-from marketcap import MarketcapFetcher
-
-
-from flaggedtoken import tracker
+from storetransactions import TransactionTracker
 
 
 class DexScreenerAPI:
     def __init__(self):
         self.reset_data()
-        self.marketcap_fetcher = MarketcapFetcher()
     
     def reset_data(self):
         self.token_ca = None
@@ -52,22 +47,21 @@ class DexScreenerAPI:
         self.token_on_pump = False
         
         self.token_dex_url = None
-
         
     async def fetch_token_data_from_dex(self, session, ca):
         self.reset_data()
-        #print(f"\n=== Fetching DexScreener Data for {ca[:8]}... ===")
+        print(f"\n=== Fetching DexScreener Data for {ca[:8]}... ===")
 
         url = f"https://api.dexscreener.com/latest/dex/search?q={ca}"
         try:
             async with session.get(url) as response:
                 if response.status != 200:
-                    #print(f"[ERROR] Dex Screener API Returned Status: {response.status}")
+                    print(f"[ERROR] Dex Screener API Returned Status: {response.status}")
                     return
                 
                 json_data = await response.json()
                 if not json_data or 'pairs' not in json_data or not json_data['pairs']:
-                    #print(f"[INFO] No pairs found for {ca[:8]}... - Token might be on Pump")
+                    print(f"[INFO] No pairs found for {ca[:8]}... - Token might be on Pump")
                     self.token_on_pump = True
                     return
                 
@@ -76,12 +70,10 @@ class DexScreenerAPI:
                 found_pair = False
                 for pair in json_data['pairs']:
                     found_pair = True
-                    #print("\nToken Metrics:")
+                    print("\nToken Metrics:")
                     #get mc
                     self.token_mc = float(pair.get('fdv', 0))
-                    if self.token_mc == "Unknown" or self.token_mc == "unknown":
-                        self.token_mc = self.marketcap_fetcher.calculate_marketcap(ca)
-                    #print(f"- Market Cap: ${self.token_mc:,.2f}")
+                    print(f"- Market Cap: ${self.token_mc:,.2f}")
                     #self.token_name = pair.get('baseToken', {}).get('name', '')
                     #print(f"- Token Name: {self.token_name}")
 
@@ -91,7 +83,7 @@ class DexScreenerAPI:
                     self.token_1h_vol = float(volume_data.get('h1', 0))
                     self.token_6h_vol = float(volume_data.get('h6', 0))
                     self.token_24h_vol = float(volume_data.get('h24', 0))
-                    #print(f"- 1h Volume: ${self.token_1h_vol:,.2f}")
+                    print(f"- 1h Volume: ${self.token_1h_vol:,.2f}")
 
                     #get buys & sells
                     txns_data = pair.get('txns', {})
@@ -114,7 +106,7 @@ class DexScreenerAPI:
                     #get liquidity
                     liquidity_data = pair.get('liquidity', {})
                     self.token_liquidity = float(liquidity_data.get('usd', 0))
-                    #print(f"- Liquidity: ${self.token_liquidity:,.2f}")
+                    print(f"- Liquidity: ${self.token_liquidity:,.2f}")
                     
                     #x, tg, and dex url
                     info = pair.get('info', {})
@@ -128,10 +120,10 @@ class DexScreenerAPI:
                             self.x_link = social.get('url', 'No Twitter Link')
                     self.token_dex_url = pair.get('url', '')
                     
-                    #print("\nSocial Links:")
-                    #print(f"- Telegram: {'Yes' if self.has_tg else 'No'}")
-                    #print(f"- Twitter: {'Yes' if self.has_x else 'No'}")
-                    #print(f"- DEX URL: {self.token_dex_url}")
+                    print("\nSocial Links:")
+                    print(f"- Telegram: {'Yes' if self.has_tg else 'No'}")
+                    print(f"- Twitter: {'Yes' if self.has_x else 'No'}")
+                    print(f"- DEX URL: {self.token_dex_url}")
                     break
                     
         except Exception as e:
@@ -142,6 +134,7 @@ class AlefDaoScraper:
     def __init__(self):
         self.url = "https://discord.com/api/v10/channels/{}/messages"
         self.dex = DexScreenerAPI()
+        self.tracker = TransactionTracker()
 
         self.last_message_ids = {}
         self.multi_alerted_cas = set()
@@ -170,17 +163,6 @@ class AlefDaoScraper:
         self.multi_alert_webhook = MULTI_ALERT_WEBHOOK
         self.twox_webhook = TWOX_WEBHOOK
 
-    async def flag_token_for_tracking(self, ca: str):
-        tracker.initialize_token(ca)
-        #print(f"Flagged token: {token_name} ({ca})")
-
-    async def stop_tracking_token(self, ca: str):
-        tracker.stop_tracking(ca)
-
-    async def list_tracked_tokens(self):
-        await tracker.list_tracked_tokens()
-
-
     
     async def swt_fetch_messages(self, session, channel_id, ca_set, channel_name):
         headers = {'authorization': TOKEN}
@@ -198,26 +180,41 @@ class AlefDaoScraper:
                             message_id = latest_message['id']
                             if message_id not in processed_messages:
                                 processed_messages.add(message_id)
-                                #print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] New message in {channel_name}")
+                                print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] New message in {channel_name}")
                                 await self.swt_process_messages(session, latest_message, ca_set, channel_name)
                     else:
                         print(f"[ERROR] Failed to fetch messages from {channel_name}: Status {response.status}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(5)
             except Exception as e:
                 print(f"[ERROR] Exception in {channel_name} channel: {str(e)}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(5)
 
     async def swt_process_messages(self, session, message, ca_set, channel_name):
         try:
             embeds = message.get('embeds', [])
             if not embeds:
+                print(f"[{channel_name}] No embeds found in message")
                 return
 
             embed = embeds[0]
             tx_description = embed.get('description', '')
             
-            if not tx_description or "swapped" not in tx_description.lower():
+            if not tx_description:
+                print(f"[{channel_name}] No transaction description found")
                 return
+            
+            description_lower = tx_description.lower()
+            
+            
+            
+            # Check if this is a swap transaction
+            if "swapped" not in description_lower:
+                return
+
+            # If transaction contains " for x sol " pattern, it's a sell
+
+            #print(f"\n=== Processing Message from {channel_name} ===")
+            print(f"Transaction Description: {tx_description[:100]}...")
 
             fields = embed.get('fields', [])
             for field in fields:
@@ -225,12 +222,16 @@ class AlefDaoScraper:
                 if token_name not in {'sol', 'useful links', 'buy with bonkbot', 'token address'}:
                     ca = field.get('value', '')
                     if ca and ca not in {'So11111111111111111111111111111111111111112', '[Wallet]', '[Neo]'}:
-                        if ca in tracker.tracked_tokens:
-                            await tracker.process_transaction(ca, tx_description, channel_name)
-                        
-                        sol_amount, is_buy = self.extract_sol_amount(tx_description)
+
+                        if "swapped" and "SOL for" in tx_description:
+                            await self.tracker.process_buy_transaction(ca, token_name, tx_description)
+                        elif "for" and "SOL on" in tx_description:
+                            await self.tracker.process_sell_transaction(ca, token_name, tx_description)
+
+                        sol_amount = self.extract_sol_buy_amount(tx_description)
                         if sol_amount > 0:
                             wallet_type = 'fresh' if 'fresh' in channel_name.lower() else 'swt'
+
                             if sol_amount >= 5.0:
                                 await self.sol_tracker.add_transaction(
                                     ca=ca,
@@ -242,13 +243,21 @@ class AlefDaoScraper:
                                 )
                         
                         ca_set.add(ca)
+                        #print(f"Found new token:")
+                        #print(f"- Name: {token_name}")
+                        #print(f"- Contract: {ca[:20]}...")
+                        #print(f"- Channel: {channel_name}")
+                        
                         if ca not in self.ca_to_tx_descriptions:
                             self.ca_to_tx_descriptions[ca] = []
                         if (tx_description, channel_name) not in self.ca_to_tx_descriptions[ca]:
                             self.ca_to_tx_descriptions[ca].append((tx_description, channel_name))
+                            print(f"- Added new transaction description")
 
                         await self.check_for_multialert(session, token_name, ca)
                         return
+
+            #print("=== Message Processing Complete ===\n")
 
         except Exception as e:
             print(f"[ERROR] Error Processing SWT Messages: {str(e)}")
@@ -337,64 +346,96 @@ class AlefDaoScraper:
                                     await self.fresh_channels_process_messages(session, latest_message, ca_set, channel_name)
                         else:
                             print(f"[ERROR] Failed to fetch messages from {channel_name}: Status {response.status}")
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(5)
                 except Exception as e:
                     print(f"[ERROR] Exception in {channel_name} channel: {str(e)}")
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(5)
 
     async def fresh_channels_process_messages(self, session, message, ca_set, channel_name):
-        try:
-            embeds = message.get('embeds', [])
-            if not embeds:
-                return
+            try:
+                embeds = message.get('embeds', [])
+                if not embeds:
+                    print(f"[{channel_name}] No embeds found in message")
+                    return
 
-            embed = embeds[0]
-            tx_description = embed.get('description', '')
-            
-            if not tx_description or "swapped" not in tx_description.lower():
-                return
-            
-            token_name = embed.get('title', '').strip()
-            if token_name.startswith('$'):
-                token_name = token_name[1:]
-            
-            if not token_name:
-                return
+                embed = embeds[0]
+                tx_description = embed.get('description', '')
+                
+                if not tx_description:
+                    print(f"[{channel_name}] No transaction description found")
+                    return
+                
+                # Get token name from title and handle the '$' prefix
+                token_name = embed.get('title', '').strip()
+                if token_name.startswith('$'):
+                    token_name = token_name[1:]  # Remove the '$' prefix if present
+                
+                
+                if not token_name:
+                    print(f"[WARNING] No title found in embed for channel {channel_name}")
+                    return
+                    
+                description_lower = tx_description.lower()
+                
+                
+                
+                # Check if this is a swap transaction
+                if "swapped" not in description_lower:
+                    return
 
-            fields = embed.get('fields', [])
-            for field in fields:
-                field_name = field.get('name', '').strip().lower()
-                if field_name == "token address:":
-                    ca = field.get('value', '').strip()
-                    if ca and ca not in {'So11111111111111111111111111111111111111112', '[Wallet]', '[Neo]'}:
-                        if ca in tracker.tracked_tokens:
-                            await tracker.process_transaction(ca, tx_description, channel_name)
-                        
-                        sol_amount, is_buy = self.extract_sol_amount(tx_description)
-                        if sol_amount > 0:
-                            wallet_type = 'fresh' if 'fresh' in channel_name.lower() else 'swt'
-                            if sol_amount >= 5.0:
-                                await self.sol_tracker.add_transaction(
-                                    ca=ca,
-                                    sol_amount=sol_amount,
-                                    tx_description=tx_description,
-                                    channel_name=channel_name,
-                                    wallet_type=wallet_type,
-                                    token_name=token_name
-                                )
-                        
-                        ca_set.add(ca)
-                        if ca not in self.ca_to_tx_descriptions:
-                            self.ca_to_tx_descriptions[ca] = []
-                        if (tx_description, channel_name) not in self.ca_to_tx_descriptions[ca]:
-                            self.ca_to_tx_descriptions[ca].append((tx_description, channel_name))
+               
 
-                        await self.check_for_multialert(session, token_name, ca)
-                        return
+                #print(f"\n=== Processing Message from {channel_name} ===")
+                print(f"Transaction Description: {tx_description[:100]}...")
 
-        except Exception as e:
-            print(f"[ERROR] Error Processing Messages from {channel_name}: {str(e)}")
-        
+                fields = embed.get('fields', [])
+                for field in fields:
+                    field_name = field.get('name', '').strip().lower()
+                    if field_name == "token address:":
+                        ca = field.get('value', '').strip()
+                        if ca and ca not in {'So11111111111111111111111111111111111111112', '[Wallet]', '[Neo]'}:
+                            if "swapped" and "SOL for" in tx_description:
+                                await self.tracker.process_buy_transaction(ca, token_name, tx_description)
+                            elif "for" and "SOL on" in tx_description:
+                                await self.tracker.process_sell_transaction(ca, token_name, tx_description)
+
+                            sol_amount = self.extract_sol_buy_amount(tx_description)
+                            if sol_amount > 0:
+                                wallet_type = 'fresh' if 'fresh' in channel_name.lower() else 'swt'
+                                
+                                if sol_amount >= 5.0:
+                                    await self.sol_tracker.add_transaction(
+                                        ca=ca,
+                                        sol_amount=sol_amount,
+                                        tx_description=tx_description,
+                                        channel_name=channel_name,
+                                        wallet_type=wallet_type,
+                                        token_name=token_name
+                                    )
+                            
+                            ca_set.add(ca)
+                            #print(f"Found new token:")
+                            #print(f"- Contract: {ca[:20]}...")
+                            #print(f"- Name: {token_name}")
+                            #print(f"- Channel: {channel_name}")
+                            
+                            if ca not in self.ca_to_tx_descriptions:
+                                self.ca_to_tx_descriptions[ca] = []
+                            if (tx_description, channel_name) not in self.ca_to_tx_descriptions[ca]:
+                                self.ca_to_tx_descriptions[ca].append((tx_description, channel_name))
+                                #print(f"- Added new transaction description")
+
+                            # Fetch additional token data
+                            await self.check_for_multialert(session, token_name, ca)
+                            #fresh_token_name = self.dex.token_name
+                            #print(fresh_token_name)
+                            return
+
+                #print("=== Message Processing Complete ===\n")
+
+            except Exception as e:
+                print(f"[ERROR] Error Processing Messages from {channel_name}: {str(e)}")
+    
     async def start_market_cap_monitoring(self, session, ca, token_name):
         """Start monitoring market cap for a specific token with task management"""
         if ca not in self.monitoring_tasks:
@@ -414,7 +455,7 @@ class AlefDaoScraper:
                 if current_mc is None or current_mc == 0:
                     retries += 1
                     if retries >= max_retries:
-                        #print(f"Stopping monitoring for {ca} - No valid market cap data")
+                        print(f"Stopping monitoring for {ca} - No valid market cap data")
                         return
                     await asyncio.sleep(5)
                     continue
@@ -476,7 +517,7 @@ class AlefDaoScraper:
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.twox_webhook, json=data) as response:
                     if response.status == 204:
-                        print(f"")
+                        print(f"2x alert sent successfully for {token_name}!")
                     else:
                         print(f"Failed to send 2x alert webhook: {response.status}")
 
@@ -484,6 +525,24 @@ class AlefDaoScraper:
         except Exception as e:
             print(f"Error sending 2x webhook: {e}")
 
+
+    def extract_sol_buy_amount(self, tx_description: str) -> float:
+        """Extract SOL buy amount from transaction description"""
+        parts = tx_description.lower().split()
+        
+        try:
+            for i, word in enumerate(parts):
+                if word == "swapped":
+                    next_word = parts[i + 1]
+                    try:
+                        if next_word.replace(".", "").isdigit() and parts[i + 2] == "sol":
+                            return float(next_word)
+                    except ValueError:
+                        continue
+        except IndexError:
+            return 0
+        
+        return 0
 
     def aggregate_sol_buys(self, tx_descriptions: list) -> dict:
         """Aggregate total SOL buys by wallet category using channel names"""
@@ -505,10 +564,7 @@ class AlefDaoScraper:
         seen_fresh_txs = set()
         
         for tx_description, channel_name in tx_descriptions:
-            sol_amount, is_buy = self.extract_sol_amount(tx_description)
-            if not is_buy:  
-                continue
-
+            sol_amount = self.extract_sol_buy_amount(tx_description)
             if sol_amount > 0:
                 # Map channel_name to the appropriate category
                 if channel_name == 'Fresh' or 'freshly funded wallet' in tx_description.lower():
@@ -539,41 +595,12 @@ class AlefDaoScraper:
                 elif channel_name == 'Degen':
                     buys['Degen'] += sol_amount
         return buys
-    
-    def extract_sol_amount(self, tx_description: str) -> Tuple[float, bool]:
-        description = tx_description.lower()
-        
-        # If there's no swap, ignore the transaction
-        if "swapped" not in description:
-            return 0, False
-        
-        # Pattern 1: If format is "swapped X SOL for..."
-        if "swapped" in description:
-            parts = description.split()
-            try:
-                for i, word in enumerate(parts):
-                    if word == "swapped":
-                        next_word = parts[i + 1]
-                        if next_word.replace(".", "").isdigit() and parts[i + 2].lower() == "sol":
-                            return float(next_word), True  # This is a buy
-            except (IndexError, ValueError):
-                pass
-        
-        # Pattern 2: If format is "swapped X tokens for Y SOL"
-        if re.search(r'\sfor\s+([\d,.]+)\s+sol\s', description):
-            try:
-                amount = float(re.search(r'\sfor\s+([\d,.]+)\s+sol\s', description).group(1))
-                return amount, False  # This is a sell
-            except (AttributeError, ValueError):
-                pass
-        
-        return 0, False
 
 
     async def check_for_multialert(self, session, token_name, ca):
         """Check if token has been bought by both fresh and SOL tracker wallets"""
         if ca in self.multi_alerted_cas:
-            #print(f"Token {token_name} already alerted for multi-ape, skipping... ")
+            print(f"Token {token_name} already alerted for multi-ape, skipping... ")
             return
 
         fresh_ca_tracker_sets = {
@@ -615,22 +642,19 @@ class AlefDaoScraper:
                 combined_description = "\n".join([desc for desc, _ in self.ca_to_tx_descriptions.get(ca, [])])
                 sol_buys = self.aggregate_sol_buys(self.ca_to_tx_descriptions.get(ca, []))
 
-                #print("\nMASOL Buy Amounts:")
+                print("\nMASOL Buy Amounts:")
                 for wallet_type, amount in sol_buys.items():
                     if amount > 0:
-                        print("")
-                        #print(f"{wallet_type}: {amount:.2f} SOL")
+                        print(f"{wallet_type}: {amount:.2f} SOL")
                 print("\nChannel Names and Transactions:")
                 for desc, channel in self.ca_to_tx_descriptions.get(ca, []):
-                    #print(f"{channel}: {desc}")
-                    print("")
+                    print(f"{channel}: {desc}")
 
                 sol_wallets_str = ', '.join(sol_wallet_names)
                 
                 market_cap_display = "${:,.2f}".format(self.dex.token_mc) if self.dex.token_mc else "Unknown"
                 volume_display = "${:,.2f}".format(self.dex.token_5m_vol) if self.dex.token_5m_vol else "Unknown"
                 
-                """
                 print(
                     f"{"-" * 15}\n"
                     f"\n=== Multi-Alert Found at {alert_time} ===\n"
@@ -650,7 +674,6 @@ class AlefDaoScraper:
                     f"DEX: {self.dex.token_dex_url or 'No DEX URL'}\n"
                     f"{"-" * 15}\n"
                 )
-                """
 
                 await self.send_webhook_message(
                     ca=ca,
@@ -747,8 +770,7 @@ class AlefDaoScraper:
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.multi_alert_webhook, json=data) as response:
                     if response.status == 204:
-                        print("")
-                        #print("Multi-alert webhook sent successfully!")
+                        print("Multi-alert webhook sent successfully!")
                     else:
                         print(f"Failed to send multi-alert webhook: {response.status}")
 
@@ -774,7 +796,7 @@ class SolAmountTracker:
             
     async def add_transaction(self, ca, sol_amount, tx_description, channel_name, wallet_type, token_name=None):
         """Add a new transaction and update cumulative amounts"""
-        #print(f"Processing transaction: {sol_amount} SOL from {channel_name} for {ca}")
+        print(f"Processing transaction: {sol_amount} SOL from {channel_name} for {ca}")
         try:
             # First initialize tracking for this CA
             await self.initialize_ca_tracking(ca, token_name)
@@ -822,7 +844,7 @@ class SolAmountTracker:
             large_single_buys = [tx for tx in transactions if tx['amount'] >= 10.0]
             if large_single_buys:
                 largest_buy = max(large_single_buys, key=lambda x: x['amount'])
-                #print(f"Found 10+ SOL buy: {largest_buy['amount']} from {largest_buy['channel']}")
+                print(f"Found 10+ SOL buy: {largest_buy['amount']} from {largest_buy['channel']}")
                 alerts_to_send.append(('One 10+ sol buy', [largest_buy]))
             
             # Check for 5+ SOL buys from different channels
@@ -839,12 +861,12 @@ class SolAmountTracker:
                 different_channel_buys = sorted(channels_with_large_buys.values(), 
                                             key=lambda x: x['amount'], 
                                             reverse=True)[:2]
-                #print(f"Found 5+ SOL buys from different channels: {[tx['channel'] for tx in different_channel_buys]}")
+                print(f"Found 5+ SOL buys from different channels: {[tx['channel'] for tx in different_channel_buys]}")
                 alerts_to_send.append(('Two 5+ sol buys', different_channel_buys))
 
             if alerts_to_send:
                 self.sol_alerted_cas.add(ca)
-                #print(f"Sending alerts for {ca}: {[alert[0] for alert in alerts_to_send]}")
+                print(f"Sending alerts for {ca}: {[alert[0] for alert in alerts_to_send]}")
                 for alert_type, txs in alerts_to_send:
                     await self.send_alert(ca, alert_type, txs)
 
@@ -928,8 +950,7 @@ class SolAmountTracker:
             async with aiohttp.ClientSession() as session:
                 async with session.post(self.webhook_url, json=data) as response:
                     if response.status == 204:
-                        print("")
-                        #print(f"1 or 2 condition alert sent successfully for {token_name} ({ca})")
+                        print(f"1 or 2 condition alert sent successfully for {token_name} ({ca})")
                     else:
                         print(f"Failed to send alert: {response.status}")
                         raise Exception(f"Webhook failed with status {response.status}")
