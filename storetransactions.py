@@ -5,28 +5,30 @@ from typing import Dict, Tuple
 import asyncio, aiohttp
 from env import SLAK_WEBHOOK
 
-WEBHOOK_URL = SLAK_WEBHOOK
 
 class TransactionTracker:
     def __init__(self):
         self.tracked_tokens: Dict[str, Dict] = {}
+        self.webhook_url = SLAK_WEBHOOK
+        self.target_ca = "BSqMUYb6ePwKsby85zrXaDa4SNf6AgZ9YfA2c4mZpump"
     
     async def flag_token(self, ca: str, token_name: str, tx_description: str):
-        if ca not in self.tracked_tokens:
-            self.tracked_tokens[ca] = {
-                'ca': ca,
-                'token_name': token_name,
-                'transactions': [],
-                'buy_amount': 0,
-                'sell_amount': 0,
-            }
-            print(f"\nStarted Tracking {token_name}\nCA: |{ca}|")
-        #check for buys &/or sells
-        if "swapped" in tx_description:
-            if "swapped" and "SOL for" in tx_description:
-                await self.add_buy_amount(ca, tx_description)
-            elif "for" and "SOL on" in tx_description:
-                await self.add_sell_amount(ca, tx_description)
+        if ca == self.target_ca:
+            if ca not in self.tracked_tokens:
+                self.tracked_tokens[ca] = {
+                    'ca': ca,
+                    'token_name': token_name,
+                    'transactions': [],
+                    'buy_amount': 0,
+                    'sell_amount': 0,
+                }
+                print(f"\nStarted Tracking {token_name}\nCA: |{ca}|")
+            #check for buys &/or sells
+            if "swapped" in tx_description:
+                if "swapped" and "SOL for" in tx_description:
+                    await self.add_buy_amount(ca, tx_description)
+                elif "for" and "SOL on" in tx_description:
+                    await self.add_sell_amount(ca, tx_description)
         
         
         
@@ -35,20 +37,25 @@ class TransactionTracker:
     #----------------------------------------
 
     async def process_sell_transaction(self, ca: str, token_name: str, tx_description: str):
-        await self.flag_token(ca, token_name, tx_description)
-        await self.update_sell_totals(ca)
-        await self.send_webhook(ca)
+        if ca == self.target_ca:
+            await self.flag_token(ca, token_name, tx_description)
+            await self.update_sell_totals(ca)
+            await self.send_webhook(ca)
 
     
     async def extract_sell_amounts(self, tx_description: str) -> float:
-        pattern = r'swapped [\d,.]+ \w+ for ([\d,.]+) SOL'
+        pattern = r'swapped [\d,.]+ \w+ for ([\d,\.]+) SOL'
         match = re.search(pattern, tx_description)
+        print(f"Sell TX: {tx_description}")
         if match:
             try:
-                sell_amount = float(match.group(1).replace(',', ''))
+                amount_str = match.group(1)
+                sell_amount = float(amount_str.replace(',', ''))
+                print(f"Extracted sell amount: {sell_amount}")
                 return sell_amount
             except ValueError:
                 return 0.0
+        print(f"No match found - Pattern failed to match: {pattern}")
         return 0.0
     
     async def add_sell_amount(self, ca: str, tx_description: str):
@@ -73,9 +80,10 @@ class TransactionTracker:
 #----------------------------------------
 
     async def process_buy_transaction(self, ca: str, token_name: str, tx_description: str):
-        await self.flag_token(ca, token_name, tx_description)
-        await self.update_buy_totals(ca)
-        await self.send_webhook(ca)
+        if ca == self.target_ca:
+            await self.flag_token(ca, token_name, tx_description)
+            await self.update_buy_totals(ca)
+            await self.send_webhook(ca)
 
     
     async def extract_buy_amounts(self, tx_description: str) -> float:
@@ -161,7 +169,7 @@ class TransactionTracker:
 
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.post(WEBHOOK_URL, json=data) as response:
+                async with session.post(self.webhook_url, json=data) as response:
                     if response.status == 204:
                         print("Webhook sent successfully")
                     else:
@@ -170,38 +178,6 @@ class TransactionTracker:
                 print(f"Error sending webhook: {str(e)}")
 
         
-
-
-
-
-
-
-
-
-
-
-
-# Test the functionality
-async def main():
-   tracker = TransactionTracker()
-   descriptions = {
-       "Kol	DpNVrt_gorillacapsol_50_13.3K has swapped 792,158.18 tor for 2.47 SOL on Raydium.",
-       "HF	BDFMk_Dex_BS_Chua_82 has swapped 2,992,414.77 22nd for 1.42 SOL on Raydium.",
-       "Kol	DpNVrt_gorillacapsol_50_13.3K has swapped 883,212.31 tor for 3.78 SOL on Raydium.",
-       "HF BDFMk_Dex_BS_Chua_82 has swapped 1.5 SOL for 625,281.2 FIFTY on Raydium.",
-       "Smart nig_70 has swapped 11.09 SOL for 29,759,514.17 ledger cto on Pumpfun 💊."
-   }
-
-   for desc in descriptions:
-       if "swapped" and "SOL for" in desc:
-           await tracker.process_buy_transaction('test_ca', 'test_name', desc)
-       elif "for" and "SOL on" in desc:
-           await tracker.process_sell_transaction('test_ca', 'test_name', desc)
-           
-   await tracker.print_final_summary('test_ca')
-
-if __name__ == "__main__":
-   asyncio.run(main())
 
     # Flow:
 # 1. MAbot.py detects new transaction
