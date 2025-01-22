@@ -7,6 +7,7 @@ from datetime import datetime
 #from token_revival import TokenRevivalMonitor
 from env import TOKEN, MULTI_ALERT_WEBHOOK, TWOX_WEBHOOK
 from typing import Dict, Tuple
+from marketcap import MarketcapFetcher
 
 
 from flaggedtoken import tracker
@@ -15,6 +16,7 @@ from flaggedtoken import tracker
 class DexScreenerAPI:
     def __init__(self):
         self.reset_data()
+        self.marketcap_fetcher = MarketcapFetcher()
     
     def reset_data(self):
         self.token_ca = None
@@ -77,6 +79,8 @@ class DexScreenerAPI:
                     #print("\nToken Metrics:")
                     #get mc
                     self.token_mc = float(pair.get('fdv', 0))
+                    if self.token_mc == "Unknown" or self.token_mc == "unknown":
+                        self.token_mc = self.marketcap_fetcher.calculate_marketcap(ca)
                     #print(f"- Market Cap: ${self.token_mc:,.2f}")
                     #self.token_name = pair.get('baseToken', {}).get('name', '')
                     #print(f"- Token Name: {self.token_name}")
