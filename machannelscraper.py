@@ -78,18 +78,3 @@ class ADScraper:
                         await telegram_main(ca)
         except Exception as e:
             print(str(e))
-
-
-async def main():
-    scraper = ADScraper()
-    async with aiohttp.ClientSession() as session:
-        tasks = [
-            scraper.fetch_ma_messages(session, '1298438610663768154', 'Multi-Alert Channel')
-        ]
-        try:
-            await asyncio.gather(*tasks)  
-        except Exception as e:
-            print(f"Error: {str(e)}")
-            await asyncio.sleep(5)
-if __name__ == "__main__":
-    asyncio.run(main())

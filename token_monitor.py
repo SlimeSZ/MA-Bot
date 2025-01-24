@@ -6,7 +6,6 @@ import statistics
 from MAbot import DexScreenerAPI
 from marketcap import MarketcapFetcher
 from machannelscraper import ADScraper
-
 class TokenMonitor:
     def __init__(self):
         self.dex = DexScreenerAPI()
@@ -40,19 +39,6 @@ class TokenMonitor:
         self.pump_threshold = 50
 
         self.token_significant_mc_increase_webhook_url = ""
-
-
-    
-    async def store_multialerts(self):
-        pass #this functionality will be performed in machannelscraper.py
-
-    async def fetch_token_marketcap(self, ca: str) -> float:
-        marketcap = self.mc_rpc.calculate_marketcap(ca)
-        
-        #conditions go here
-        if marketcap in range(self.hundredk_range):
-            await self.store_as_100k_mc_range(ca)
-
     
 
 
@@ -238,6 +224,13 @@ class TokenMonitor:
         finally:
             if ca in self.monitoring_tasks:
                 del self.monitoring_tasks[ca]
+
+
+
+
+
+
+
 
 
 

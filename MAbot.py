@@ -7,6 +7,7 @@ from datetime import datetime
 #from token_revival import TokenRevivalMonitor
 from env import TOKEN, MULTI_ALERT_WEBHOOK, TWOX_WEBHOOK
 from storetransactions import TransactionTracker
+from machannelscraper import ADScraper
 
 
 class DexScreenerAPI:
@@ -969,6 +970,7 @@ class SolAmountTracker:
 class Main:
     def __init__(self):
         self.scraper = AlefDaoScraper()
+        self.ma_scraper = ADScraper()
         #print("\n=== Discord Multi Tracking Bot ===")
         #print("Initializing...")
 
@@ -993,6 +995,8 @@ class Main:
                 self.scraper.fresh_channel_fetch_messages(session, '1281675800260640881', self.scraper.fresh_cas, 'Fresh'),
                 self.scraper.fresh_channel_fetch_messages(session, '1281677424005746698', self.scraper.fresh_1h_cas, 'Fresh 1h'),
                 self.scraper.fresh_channel_fetch_messages(session, '1281676746202026004', self.scraper.fresh_5sol_1m_mc_cas, 'Fresh 5sol 1m MC')
+
+                #self.ma_scraper.fetch_ma_messages(session, '1298438610663768154', 'Multi-Alert Channel')
             ]
 
             try:

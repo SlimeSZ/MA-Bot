@@ -8,13 +8,20 @@ import asyncio, aiohttp
 class TransactionTracker:
     def __init__(self):
         self.tracked_tokens: Dict[str, Dict] = {}
+        self.processed_txs = set()
         self.alerted_cas = set()
         self.bpi_alerted_cas = {}
         self.sell_pressure_alerted_cas = {}
 
-        WEBHOOKS_GO_HERE
+        self.large_buys_wh = "https://discord.com/api/webhooks/1332066523681919017/Nk6tNc0Phlx9xNYtuBK_JIOskLnoBN7Jg_w3VOvqeCJVJTVz0xTqsiFlK28BdnxxqVl5"
+        self.bpi_wh = "https://discord.com/api/webhooks/1332066601922596974/ml6KuhW1pMeKDLTVlZsrMSi0faWm386-UIOWSlJm5PB5j-vzkFRE62PauO8gkmrYefaV"
+        self.sell_wh = "https://discord.com/api/webhooks/1332066657853505557/HXqQjdEdrTCwFH80yiQzeeBSgqnO4YWv9SdXE_Hkojj63XfvbGQy7MqCdeYhQxdNbK4_"
     
     async def flag_token_as_large_buys(self, ca: str, token_name: str, tx_description: str):
+        if tx_description in self.processed_txs:
+            return
+        self.processed_txs.add(tx_description)
+        
         if ca not in self.tracked_tokens:
             self.tracked_tokens[ca] = {
                 'ca': ca,
@@ -41,12 +48,21 @@ class TransactionTracker:
                         self.tracked_tokens[ca]['last_alerted_buy'] = current_buys
                         self.tracked_tokens[ca]['last_alerted_sell'] = current_sells
                         await self.send_webhook(ca)
-                    elif (abs(current_buys - self.tracked_tokens[ca]['last_alerted_buy']) >= 15 or 
-                        abs(current_sells - self.tracked_tokens[ca]['last_alerted_sell']) >= 15):
-                        self.tracked_tokens[ca]['last_alerted_buy'] = current_buys
-                        self.tracked_tokens[ca]['last_alerted_sell'] = current_sells
-                        await self.send_webhook(ca)
+                    elif current_buys >= 500:  # Check for high volume threshold
+                        if (abs(current_buys - self.tracked_tokens[ca]['last_alerted_buy']) >= 100 or 
+                            abs(current_sells - self.tracked_tokens[ca]['last_alerted_sell']) >= 100):
+                            self.tracked_tokens[ca]['last_alerted_buy'] = current_buys
+                            self.tracked_tokens[ca]['last_alerted_sell'] = current_sells
+                            await self.send_webhook(ca)
+                    else:  # For buys between 30 and 500
+                        if (abs(current_buys - self.tracked_tokens[ca]['last_alerted_buy']) >= 15 or 
+                            abs(current_sells - self.tracked_tokens[ca]['last_alerted_sell']) >= 15):
+                            self.tracked_tokens[ca]['last_alerted_buy'] = current_buys
+                            self.tracked_tokens[ca]['last_alerted_sell'] = current_sells
+                            await self.send_webhook(ca)
+
                 await self.check_ratio(ca)
+
             elif "for" and "SOL on" in tx_description:
                 await self.add_sell_amount(ca, tx_description)
                 current_buys = self.tracked_tokens[ca]['buy_amount']
